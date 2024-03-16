@@ -921,6 +921,8 @@ void CommandPool::set_name(const std::string& name)
 void CommandPool::reset()
 {
     auto backend = m_vk_backend.lock();
+	
+	vkDeviceWaitIdle(backend->device());
 
     if (vkResetCommandPool(backend->device(), m_vk_pool, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT) != VK_SUCCESS)
     {
@@ -2433,7 +2435,7 @@ RayTracingPipeline::RayTracingPipeline(Backend::Ptr backend, Desc desc) :
         memcpy(dst_ptr, src_ptr, group_handle_size);
 
         dst_ptr += group_size_aligned;
-        src_ptr += group_size_aligned;
+        src_ptr += group_handle_size;
     }
 }
 
@@ -3613,8 +3615,10 @@ void Backend::initialize()
     m_trilinear_sampler = Sampler::create(shared_from_this(), sampler_desc);
     m_trilinear_sampler->set_name("Trilinear Sampler");
 
+	// reset
     sampler_desc.mag_filter = VK_FILTER_NEAREST;
     sampler_desc.min_filter = VK_FILTER_NEAREST;
+	sampler_desc.mipmap_mode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
 
     m_nearest_sampler = Sampler::create(shared_from_this(), sampler_desc);
     m_nearest_sampler->set_name("Nearest Sampler");
@@ -4825,17 +4829,17 @@ void Backend::create_render_pass()
     dependencies[0].srcSubpass      = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass      = 0;
     dependencies[0].srcStageMask    = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    dependencies[0].dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[0].dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     dependencies[0].srcAccessMask   = VK_ACCESS_MEMORY_READ_BIT;
-    dependencies[0].dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[0].dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
     dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
     dependencies[1].srcSubpass      = 0;
     dependencies[1].dstSubpass      = VK_SUBPASS_EXTERNAL;
-    dependencies[1].srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[1].dstStageMask    = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    dependencies[1].srcAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependencies[1].dstAccessMask   = VK_ACCESS_MEMORY_READ_BIT;
+    dependencies[1].srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[1].dstStageMask    = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+    dependencies[1].srcAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask   = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
     dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
     m_swap_chain_render_pass = RenderPass::create(shared_from_this(), attachments, subpass_description, dependencies);
@@ -4942,6 +4946,10 @@ void set_image_layout(VkCommandBuffer         cmdbuffer,
             // Make sure host writes have been finished
             image_memory_barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
             break;
+			
+        case VK_IMAGE_LAYOUT_GENERAL:
+            image_memory_barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            break;			
 
         case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
             // Image is a color attachment
@@ -4974,6 +4982,7 @@ void set_image_layout(VkCommandBuffer         cmdbuffer,
             break;
         default:
             // Other source layouts aren't handled (yet)
+			assert(false);
             break;
     }
 
@@ -4981,6 +4990,10 @@ void set_image_layout(VkCommandBuffer         cmdbuffer,
     // Destination access mask controls the dependency for the new image layout
     switch (newImageLayout)
     {
+		case VK_IMAGE_LAYOUT_GENERAL:
+            image_memory_barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            break;	
+			
         case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
             // Image will be used as a transfer destination
             // Make sure any writes to the image have been finished
@@ -5016,6 +5029,7 @@ void set_image_layout(VkCommandBuffer         cmdbuffer,
             break;
         default:
             // Other source layouts aren't handled (yet)
+			assert(false);
             break;
     }
 
